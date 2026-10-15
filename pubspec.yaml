@@ -1,0 +1,61 @@
+name: personal_os
+description: "Personal OS — application personnelle de discipline et de construction de vie."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+
+  # State management
+  flutter_riverpod: ^2.5.1
+
+  # Réseau
+  http: ^1.2.2
+
+  # Stockage sécurisé du token JWT
+  flutter_secure_storage: ^9.2.2
+
+  # Notifications locales
+  flutter_local_notifications: ^17.2.3
+  timezone: ^0.9.4
+
+  # Navigation
+  go_router: ^13.2.0
+
+  # Dates en français
+  intl: ^0.19.0
+
+  # Confetti (livres terminés)
+  confetti: ^0.7.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.1
+  rename_app: ^1.6.6
+
+flutter_launcher_icons:
+  image_path: "assets/branding/logo_mark_padded.png"
+  android: true
+  ios: true
+  # The mark's own artwork runs edge-to-edge in the source file, with
+  # no built-in margin. Android's adaptive-icon mask (and OEM icon-shape
+  # theming like Samsung's) only ever shows the inner ~66% "safe zone"
+  # of the canvas, so a full-bleed image gets its outer ring clipped —
+  # that's what made the launcher icon look off-center/cropped.
+  # logo_mark_padded.png / logo_adaptive_foreground.png are regenerated
+  # from the same glyph, scaled to ~42% of the canvas and centered, so
+  # it survives that crop on every launcher shape.
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/branding/logo_adaptive_foreground.png"
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/branding/
