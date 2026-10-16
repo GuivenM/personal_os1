@@ -9,6 +9,7 @@ import '../../../shared/widgets/glass_card.dart';
 import '../providers/schedule_providers.dart';
 
 const _dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const _dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 class EditTab extends ConsumerStatefulWidget {
   const EditTab({super.key});
@@ -101,13 +102,32 @@ class _EditTabState extends ConsumerState<EditTab> {
             const SizedBox(height: 8),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: const [
-                  Expanded(
-                    child: Text(
-                      'Tap a block to edit it. Hold and drag the handle to reorder.',
-                      style: TextStyle(color: AppColors.textMuted, fontSize: 12),
-                    ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Tap a block to edit it. Hold and drag the handle to reorder.',
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 12),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _openCreateSheet,
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('Add block'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: blocks.isEmpty ? null : _openCopySheet,
+                          icon: const Icon(Icons.copy_all_outlined, size: 18),
+                          label: const Text('Copy day'),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -181,24 +201,55 @@ class _EditTabState extends ConsumerState<EditTab> {
     }
   }
 
-  Future<void> _openEditSheet(ScheduleBlock block) async {
+  Future<void> _openEditSheet(ScheduleBlock block) => _showBlockSheet(block: block);
+
+  Future<void> _openCreateSheet() {
+    // Suggest starting where the day's last block ends.
+    final blocks = _localBlocks ?? const <ScheduleBlock>[];
+    final suggestedStart = blocks.isEmpty ? null : _parseTimeOfDay(blocks.last.timeEnd);
+    return _showBlockSheet(suggestedStart: suggestedStart);
+  }
+
+  Future<void> _showBlockSheet({ScheduleBlock? block, TimeOfDay? suggestedStart}) async {
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) => _EditBlockSheet(block: block),
+      builder: (context) => _EditBlockSheet(
+        block: block,
+        dayOfWeek: _selectedDay,
+        suggestedStart: suggestedStart,
+      ),
     );
 
     if (saved == true) {
       await _reload();
     }
   }
+
+  Future<void> _openCopySheet() async {
+    final copied = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) => _CopyDaySheet(fromDay: _selectedDay),
+    );
+
+    if (copied == true) {
+      await _reload();
+    }
+  }
 }
 
 class _EditBlockSheet extends ConsumerStatefulWidget {
-  const _EditBlockSheet({required this.block});
-  final ScheduleBlock block;
+  const _EditBlockSheet({required this.block, required this.dayOfWeek, this.suggestedStart});
+
+  /// null = creating a new block on [dayOfWeek].
+  final ScheduleBlock? block;
+  final int dayOfWeek;
+  final TimeOfDay? suggestedStart;
 
   @override
   ConsumerState<_EditBlockSheet> createState() => _EditBlockSheetState();
@@ -215,10 +266,17 @@ class _EditBlockSheetState extends ConsumerState<_EditBlockSheet> {
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(text: widget.block.name);
-    _descriptionController = TextEditingController(text: widget.block.description);
-    _timeStart = _parseTime(widget.block.timeStart);
-    _timeEnd = _parseTime(widget.block.timeEnd);
+    final block = widget.block;
+    _nameController = TextEditingController(text: block?.name ?? '');
+    _descriptionController = TextEditingController(text: block?.description ?? '');
+    if (block != null) {
+      _timeStart = _parseTime(block.timeStart);
+      _timeEnd = _parseTime(block.timeEnd);
+    } else {
+      _timeStart = widget.suggestedStart ?? const TimeOfDay(hour: 9, minute: 0);
+      final endHour = _timeStart.hour + 1;
+      _timeEnd = endHour > 23 ? const TimeOfDay(hour: 23, minute: 59) : TimeOfDay(hour: endHour, minute: _timeStart.minute);
+    }
   }
 
   static TimeOfDay _parseTime(String value) {
@@ -256,6 +314,10 @@ class _EditBlockSheetState extends ConsumerState<_EditBlockSheet> {
       setState(() => _error = 'Name is required.');
       return;
     }
+    if (_timeEnd.hour * 60 + _timeEnd.minute <= _timeStart.hour * 60 + _timeStart.minute) {
+      setState(() => _error = 'End must be after start.');
+      return;
+    }
 
     setState(() {
       _isSaving = true;
@@ -263,18 +325,66 @@ class _EditBlockSheetState extends ConsumerState<_EditBlockSheet> {
     });
 
     try {
-      await ref.read(scheduleApiProvider).updateBlockTemplate(
-            blockId: widget.block.blockId,
-            name: _nameController.text.trim(),
-            description: _descriptionController.text.trim(),
-            timeStart: _formatTimeForApi(_timeStart),
-            timeEnd: _formatTimeForApi(_timeEnd),
-          );
+      final api = ref.read(scheduleApiProvider);
+      final block = widget.block;
+      if (block == null) {
+        await api.createBlock(
+          dayOfWeek: widget.dayOfWeek,
+          name: _nameController.text.trim(),
+          description: _descriptionController.text.trim(),
+          timeStart: _formatTimeForApi(_timeStart),
+          timeEnd: _formatTimeForApi(_timeEnd),
+        );
+      } else {
+        await api.updateBlockTemplate(
+          blockId: block.blockId,
+          name: _nameController.text.trim(),
+          description: _descriptionController.text.trim(),
+          timeStart: _formatTimeForApi(_timeStart),
+          timeEnd: _formatTimeForApi(_timeEnd),
+        );
+      }
       if (mounted) Navigator.of(context).pop(true);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
     } catch (e) {
       setState(() => _error = 'Could not save changes.');
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _delete() async {
+    final block = widget.block;
+    if (block == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Delete "${block.name}"?'),
+        content: const Text('This block and its completion history will be removed. This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete', style: TextStyle(color: AppColors.rouge)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() {
+      _isSaving = true;
+      _error = null;
+    });
+    try {
+      await ref.read(scheduleApiProvider).deleteBlock(block.blockId);
+      if (mounted) Navigator.of(context).pop(true);
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Could not delete the block.');
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
@@ -296,7 +406,10 @@ class _EditBlockSheetState extends ConsumerState<_EditBlockSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('Edit block', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            Text(
+              widget.block == null ? 'New block · ${_dayNames[widget.dayOfWeek]}' : 'Edit block',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
             const SizedBox(height: 18),
             TextField(
               controller: _nameController,
@@ -333,8 +446,16 @@ class _EditBlockSheetState extends ConsumerState<_EditBlockSheet> {
                       width: 20,
                       child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
                     )
-                  : const Text('Save'),
+                  : Text(widget.block == null ? 'Add block' : 'Save'),
             ),
+            if (widget.block != null) ...[
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: _isSaving ? null : _delete,
+                icon: const Icon(Icons.delete_outline, color: AppColors.rouge, size: 20),
+                label: const Text('Delete block', style: TextStyle(color: AppColors.rouge)),
+              ),
+            ],
           ],
         ),
       ),
@@ -372,6 +493,130 @@ class _TimeField extends StatelessWidget {
               ],
             ),
             const Icon(Icons.access_time, color: AppColors.textMuted, size: 18),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+TimeOfDay _parseTimeOfDay(String value) {
+  final parts = value.split(':');
+  if (parts.length >= 2) {
+    return TimeOfDay(hour: int.tryParse(parts[0]) ?? 0, minute: int.tryParse(parts[1]) ?? 0);
+  }
+  return const TimeOfDay(hour: 9, minute: 0);
+}
+
+/// Copy one day's blocks onto other days of the week.
+class _CopyDaySheet extends ConsumerStatefulWidget {
+  const _CopyDaySheet({required this.fromDay});
+
+  final int fromDay;
+
+  @override
+  ConsumerState<_CopyDaySheet> createState() => _CopyDaySheetState();
+}
+
+class _CopyDaySheetState extends ConsumerState<_CopyDaySheet> {
+  final Set<int> _targets = {};
+  bool _replace = false;
+  bool _isSaving = false;
+  String? _error;
+
+  Future<void> _copy() async {
+    setState(() {
+      _isSaving = true;
+      _error = null;
+    });
+    try {
+      await ref.read(scheduleApiProvider).copyDay(
+            fromDay: widget.fromDay,
+            toDays: _targets.toList()..sort(),
+            replace: _replace,
+          );
+      ref.invalidate(todayScheduleProvider);
+      if (mounted) Navigator.of(context).pop(true);
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Could not copy the day.');
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final others = [for (var i = 0; i < 7; i++) if (i != widget.fromDay) i];
+    final allSelected = _targets.length == others.length;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + MediaQuery.of(context).viewInsets.bottom),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Copy ${_dayNames[widget.fromDay]} to…',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilterChip(
+                  label: const Text('All other days'),
+                  selected: allSelected,
+                  selectedColor: AppColors.violet.withOpacity(0.18),
+                  onSelected: (on) => setState(() {
+                    _targets
+                      ..clear()
+                      ..addAll(on ? others : const <int>[]);
+                  }),
+                ),
+                for (final d in others)
+                  FilterChip(
+                    label: Text(_dayLabels[d]),
+                    selected: _targets.contains(d),
+                    selectedColor: AppColors.violet.withOpacity(0.18),
+                    onSelected: (on) => setState(() => on ? _targets.add(d) : _targets.remove(d)),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: false, label: Text('Add to existing')),
+                ButtonSegment(value: true, label: Text('Replace existing')),
+              ],
+              selected: {_replace},
+              onSelectionChanged: (value) => setState(() => _replace = value.first),
+            ),
+            if (_replace) ...[
+              const SizedBox(height: 10),
+              const Text(
+                'Replacing deletes the selected days\' current blocks together with their completion history.',
+                style: TextStyle(color: AppColors.rouge, fontSize: 12),
+              ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(_error!, style: const TextStyle(color: AppColors.rouge, fontSize: 13)),
+            ],
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _isSaving || _targets.isEmpty ? null : _copy,
+              child: _isSaving
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
+                    )
+                  : Text(_targets.isEmpty ? 'Select days' : 'Copy to ${_targets.length} day(s)'),
+            ),
           ],
         ),
       ),

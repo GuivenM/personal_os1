@@ -73,7 +73,9 @@ final recapApiProvider = Provider<RecapApi>((ref) {
 
 /// --- Auth state -------------------------------------------------------
 
-enum AuthStatus { unknown, authenticated, unauthenticated }
+/// `locked` = a session token exists and a PIN is set: the user only has to
+/// enter the PIN / fingerprint (see [LockScreen]) instead of the password.
+enum AuthStatus { unknown, authenticated, unauthenticated, locked }
 
 class AuthState {
   const AuthState({
@@ -125,6 +127,11 @@ class AuthService extends StateNotifier<AuthState> {
       state = const AuthState(status: AuthStatus.unauthenticated);
       return;
     }
+    // A PIN is set: don't open the app yet, ask for the PIN / fingerprint.
+    if ((await _storage.readPinHash()) != null) {
+      state = const AuthState(status: AuthStatus.locked);
+      return;
+    }
     try {
       final user = await _authApi.me();
       state = AuthState(status: AuthStatus.authenticated, user: user);
@@ -132,6 +139,32 @@ class AuthService extends StateNotifier<AuthState> {
       await _storage.deleteToken();
       state = const AuthState(status: AuthStatus.unauthenticated);
     }
+  }
+
+  /// Called after a correct PIN / fingerprint. Swaps the stored token for a
+  /// fresh one (sliding expiration) and opens the app.
+  Future<void> unlock() async {
+    try {
+      final result = await _authApi.refresh();
+      await _storage.saveToken(result.token);
+      state = AuthState(status: AuthStatus.authenticated, user: result.user);
+    } on ApiException catch (e) {
+      // 401: the token itself expired. ApiClient already cleared it and
+      // called _forceLogout, so the password screen is showing.
+      if (e.statusCode == 401) return;
+      // Any other error (e.g. offline): the PIN was right, let the user in;
+      // a later 401 will still sign them out.
+      state = const AuthState(status: AuthStatus.authenticated);
+    } catch (_) {
+      state = const AuthState(status: AuthStatus.authenticated);
+    }
+  }
+
+  /// Puts the app back behind the PIN screen (no-op without a PIN).
+  Future<void> lock() async {
+    if (state.status != AuthStatus.authenticated) return;
+    if ((await _storage.readPinHash()) == null) return;
+    state = const AuthState(status: AuthStatus.locked);
   }
 
   Future<void> login({required String username, required String password}) async {

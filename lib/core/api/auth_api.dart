@@ -41,6 +41,13 @@ class AuthApi {
     await _client.post('/auth/logout');
   }
 
+  /// POST /auth/refresh — swaps a still-valid token for a fresh one
+  /// (sliding expiration, called on every PIN / fingerprint unlock).
+  Future<AuthResult> refresh() async {
+    final json = await _client.post('/auth/refresh');
+    return AuthResult.fromJson(json as Map<String, dynamic>);
+  }
+
   Future<User> me() async {
     final json = await _client.get('/auth/me');
     return User.fromJson(json as Map<String, dynamic>);

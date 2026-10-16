@@ -33,6 +33,10 @@ dependencies:
   # Confetti (livres terminés)
   confetti: ^0.7.0
 
+  # Verrouillage : empreinte (local_auth) + hash du PIN (crypto)
+  local_auth: ^2.3.0
+  crypto: ^3.0.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

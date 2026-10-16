@@ -45,6 +45,44 @@ class ScheduleApi {
     await _client.post('/schedule/reorder', body: {'order': orderedBlockIds});
   }
 
+  /// POST /schedule — create a template block at the end of [dayOfWeek]
+  /// (0 = Monday … 6 = Sunday).
+  Future<void> createBlock({
+    required int dayOfWeek,
+    required String name,
+    required String description,
+    required String timeStart,
+    required String timeEnd,
+  }) async {
+    await _client.post('/schedule', body: {
+      'day_of_week': dayOfWeek,
+      'name': name,
+      'description': description,
+      'time_start': timeStart,
+      'time_end': timeEnd,
+    });
+  }
+
+  /// DELETE /schedule/{id} — removes the block AND its history logs.
+  Future<void> deleteBlock(int blockId) async {
+    await _client.delete('/schedule/$blockId');
+  }
+
+  /// POST /schedule/copy-day — copies [fromDay]'s blocks onto [toDays].
+  /// [replace] = false appends after the existing blocks; true wipes the
+  /// target days' blocks (and their logs) first.
+  Future<void> copyDay({
+    required int fromDay,
+    required List<int> toDays,
+    bool replace = false,
+  }) async {
+    await _client.post('/schedule/copy-day', body: {
+      'from_day': fromDay,
+      'to_days': toDays,
+      'mode': replace ? 'replace' : 'append',
+    });
+  }
+
   /// POST /blocks — initialize today's (or a given date's) logs.
   /// Response shape isn't guaranteed by the spec, so callers should
   /// reload via [getSchedule] right after calling this to get canonical
