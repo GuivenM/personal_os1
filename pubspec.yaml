@@ -37,6 +37,9 @@ dependencies:
   local_auth: ^2.3.0
   crypto: ^3.0.3
 
+  # Import du planning depuis un fichier CSV/TSV
+  file_picker: ^8.1.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

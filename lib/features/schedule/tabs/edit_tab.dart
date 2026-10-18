@@ -1,8 +1,15 @@
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/api_client.dart';
+import '../../../core/api/schedule_api.dart';
 import '../../../core/models/schedule_block_model.dart';
+import '../../../core/models/schedule_model.dart';
+import '../../../core/utils/sheet_text.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/widgets/glass_card.dart';
@@ -129,6 +136,26 @@ class _EditTabState extends ConsumerState<EditTab> {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _openImportSheet,
+                          icon: const Icon(Icons.table_view_outlined, size: 18),
+                          label: const Text('Import'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _exportWeek(week),
+                          icon: const Icon(Icons.content_copy_outlined, size: 18),
+                          label: const Text('Copy as sheet'),
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -226,6 +253,30 @@ class _EditTabState extends ConsumerState<EditTab> {
     if (saved == true) {
       await _reload();
     }
+  }
+
+  Future<void> _openImportSheet() async {
+    final imported = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) => const _ImportSheet(),
+    );
+
+    if (imported == true) {
+      await _reload();
+    }
+  }
+
+  /// Puts the whole week on the clipboard as tab-separated text: paste it in
+  /// Google Sheets / Excel, edit, copy the cells back and use Import.
+  Future<void> _exportWeek(WeekScheduleResponse week) async {
+    await Clipboard.setData(ClipboardData(text: buildScheduleTsv(week)));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Week copied. Paste it into Google Sheets or Excel.')),
+    );
   }
 
   Future<void> _openCopySheet() async {
@@ -493,6 +544,210 @@ class _TimeField extends StatelessWidget {
               ],
             ),
             const Icon(Icons.access_time, color: AppColors.textMuted, size: 18),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Import a schedule from spreadsheet cells (paste) or a CSV/TSV file.
+class _ImportSheet extends ConsumerStatefulWidget {
+  const _ImportSheet();
+
+  @override
+  ConsumerState<_ImportSheet> createState() => _ImportSheetState();
+}
+
+class _ImportSheetState extends ConsumerState<_ImportSheet> {
+  final _controller = TextEditingController();
+  bool _replace = false;
+  bool _busy = false;
+  String? _error;
+  List<String> _details = const [];
+  ScheduleImportSummary? _summary;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// Any change to the text or mode invalidates the previous preview.
+  void _resetPreview() {
+    if (_summary == null && _error == null) return;
+    setState(() {
+      _summary = null;
+      _error = null;
+      _details = const [];
+    });
+  }
+
+  Future<void> _paste() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.trim().isEmpty) return;
+    _controller.text = text;
+    _resetPreview();
+  }
+
+  Future<void> _pickFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['csv', 'tsv', 'txt'],
+        withData: true,
+      );
+      final bytes = result?.files.single.bytes;
+      if (bytes == null) return;
+      _controller.text = utf8.decode(bytes, allowMalformed: true);
+      _resetPreview();
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Could not read that file. Export it as CSV (UTF-8) and try again.');
+    }
+  }
+
+  Future<void> _run({required bool dryRun}) async {
+    final rows = parseDelimited(_controller.text);
+    if (rows.isEmpty) {
+      setState(() => _error = 'Paste some rows or pick a file first.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+      _details = const [];
+    });
+    try {
+      final summary = await ref.read(scheduleApiProvider).importSchedule(
+            rows: rows,
+            replace: _replace,
+            dryRun: dryRun,
+          );
+      if (dryRun) {
+        if (mounted) setState(() => _summary = summary);
+      } else {
+        ref.invalidate(todayScheduleProvider);
+        if (mounted) Navigator.of(context).pop(true);
+      }
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.message;
+          _details = e.details ?? const [];
+          _summary = null;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Could not import the schedule.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String _breakdown(ScheduleImportSummary s) {
+    final days = s.perDay.keys.toList()..sort();
+    return days.map((d) => '${_dayLabels[d]} ${s.perDay[d]}').join(' · ');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final summary = _summary;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + MediaQuery.of(context).viewInsets.bottom),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text('Import schedule', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            const Text(
+              'Columns: Day, Start, End, Name, Description (a header row is optional).\n'
+              'Day accepts Mon, Mon-Fri, Mon/Wed/Fri, Daily, Weekdays or Weekend. '
+              'Times: 6:30, 18:00, 6h30 or 6:30 PM.',
+              style: TextStyle(color: AppColors.textMuted, fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _busy ? null : _paste,
+                    icon: const Icon(Icons.content_paste, size: 18),
+                    label: const Text('Paste'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _busy ? null : _pickFile,
+                    icon: const Icon(Icons.upload_file, size: 18),
+                    label: const Text('Choose file'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _controller,
+              minLines: 5,
+              maxLines: 9,
+              onChanged: (_) => _resetPreview(),
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              decoration: const InputDecoration(
+                hintText: 'Day\tStart\tEnd\tName\tDescription\nMon-Fri\t06:30\t07:00\tWake up\t',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: false, label: Text('Add to existing')),
+                ButtonSegment(value: true, label: Text('Replace days')),
+              ],
+              selected: {_replace},
+              onSelectionChanged: (value) {
+                setState(() => _replace = value.first);
+                _resetPreview();
+              },
+            ),
+            if (_replace) ...[
+              const SizedBox(height: 8),
+              const Text(
+                'Replace only affects the days present in your file. Their current blocks and completion history are deleted.',
+                style: TextStyle(color: AppColors.rouge, fontSize: 12),
+              ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(_error!, style: const TextStyle(color: AppColors.rouge, fontSize: 13, fontWeight: FontWeight.w600)),
+              for (final line in _details)
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Text(line, style: const TextStyle(color: AppColors.rouge, fontSize: 12)),
+                ),
+            ],
+            if (summary != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Ready: ${summary.blocksToCreate} block(s) will be created (${_breakdown(summary)}).'
+                '${summary.blocksToDelete > 0 ? '\nThis deletes ${summary.blocksToDelete} existing block(s) and their history.' : ''}',
+                style: const TextStyle(fontSize: 13),
+              ),
+            ],
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: _busy ? null : () => _run(dryRun: summary == null),
+              child: _busy
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
+                    )
+                  : Text(summary == null ? 'Preview' : 'Import ${summary.blocksToCreate} block(s)'),
+            ),
           ],
         ),
       ),

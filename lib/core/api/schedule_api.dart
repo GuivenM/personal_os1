@@ -83,6 +83,21 @@ class ScheduleApi {
     });
   }
 
+  /// POST /schedule/import — spreadsheet rows (see the sheet format in the
+  /// import sheet). [dryRun] validates and summarises without writing.
+  Future<ScheduleImportSummary> importSchedule({
+    required List<List<String>> rows,
+    bool replace = false,
+    bool dryRun = false,
+  }) async {
+    final json = await _client.post('/schedule/import', body: {
+      'rows': rows,
+      'mode': replace ? 'replace' : 'append',
+      'dry_run': dryRun,
+    });
+    return ScheduleImportSummary.fromJson(json as Map<String, dynamic>);
+  }
+
   /// POST /blocks — initialize today's (or a given date's) logs.
   /// Response shape isn't guaranteed by the spec, so callers should
   /// reload via [getSchedule] right after calling this to get canonical
@@ -94,5 +109,37 @@ class ScheduleApi {
   /// PUT /blocks/{log_id} — body: { status }
   Future<void> updateBlockStatus({required int logId, required String status}) async {
     await _client.put('/blocks/$logId', body: {'status': status});
+  }
+}
+
+/// Result of POST /schedule/import (also returned by a dry run).
+class ScheduleImportSummary {
+  const ScheduleImportSummary({
+    required this.blocksToCreate,
+    required this.blocksToDelete,
+    required this.perDay,
+  });
+
+  final int blocksToCreate;
+  final int blocksToDelete;
+
+  /// Day of week (0 = Monday) → number of blocks created that day.
+  final Map<int, int> perDay;
+
+  factory ScheduleImportSummary.fromJson(Map<String, dynamic> json) {
+    final raw = json['days'];
+    final perDay = <int, int>{};
+    if (raw is Map) {
+      raw.forEach((k, v) => perDay[int.parse(k.toString())] = (v as num).toInt());
+    } else if (raw is List) {
+      for (var i = 0; i < raw.length; i++) {
+        perDay[i] = (raw[i] as num).toInt();
+      }
+    }
+    return ScheduleImportSummary(
+      blocksToCreate: (json['blocks_to_create'] as num?)?.toInt() ?? 0,
+      blocksToDelete: (json['blocks_to_delete'] as num?)?.toInt() ?? 0,
+      perDay: perDay,
+    );
   }
 }
